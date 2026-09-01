@@ -1,0 +1,27 @@
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地配置
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# 输出/日志
+outputs/
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db

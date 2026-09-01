@@ -1,109 +1,134 @@
-# 到梦空间扫码登录与数据整理工具
+# 5idream（到梦空间）扫码登录 · FastAPI 服务
 
-这是一个 Python 命令行工具，用于在本人授权的账号和环境中，通过到梦空间 APP 扫码登录，整理个人资料、活动和部落信息，并按活动编号查询活动详情。
+把原来的命令行扫码登录工具 `5idream_login.py` 改造成 **FastAPI Web 服务**。
 
-## 功能
+- **异步化 / 高并发**：全程 `httpx` 异步 + `asyncio.sleep`，不阻塞事件循环；
+- **token 个人缓存**：登录成功后按 `user_id` 缓存 5idream token，TTL 空闲过期、重复登录自动刷新、退出即清除；
+- **防击穿**：同一用户的并发请求共用一把锁 + 短期数据缓存，不会重复轰炸 5idream 接口；
+- 附极简网页 UI（`/`），可直接扫码测试。
 
-- 生成登录二维码，等待 APP 扫码并确认登录
-- 显示登录用户的姓名和头像链接
-- 查询并整理以下活动分类：
-  - 我报名的
-  - 我签到的
-  - 我管理的
-  - 我发起的
-  - 我关注的
-- 查询并整理以下部落分类：
-  - 我的部落（我管理的）
-  - 我的部落（我加入的）
-- 按活动编号查询活动详情
-- 保留活动图片、附件和部落头像等图片链接
-- 生成中文 Markdown 报告和 JSON 数据文件
-- 每次网络请求前随机等待 1 到 2 秒
+> 仅用于本人有权使用的账号与合法合规的个人数据整理，勿分享二维码、Token 与导出数据。
 
-## 环境要求
+---
 
-- Windows
-- Python 3.10 或更高版本
-- 可访问 `https://www.5idream.net/`
-- 已安装并登录到梦空间 APP
-
-## 安装依赖
-
-在脚本和依赖文件所在目录执行：
+## 1. 安装与启动
 
 ```powershell
-python -m pip install -r requirements-5idream-login.txt
+cd C:\Users\Administrator\Desktop\Fastapi\5idream-fastapi
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python run.py
 ```
 
-使用的库：
+启动后访问：http://127.0.0.1:8000/
 
-- `requests`：发送网络请求
-- `qrcode[pil]`：生成二维码
-- `Pillow`：保存二维码图片
+> 不想用 venv 也可以直接 `pip install -r requirements.txt`。
+> 生产环境建议 `uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1`（内存缓存单进程共享，多 worker 需换 Redis 实现）。
 
-## 使用方法
+## 2. 接口一览
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/v1/login/qr` | 创建扫码登录会话，返回 `session_id` + 二维码 |
+| GET | `/api/v1/login/status/{session_id}` | 轮询扫码结果（客户端每 2~3 秒调一次） |
+| GET | `/api/v1/activity-categories` | 活动分类目录（分库 key，公开） |
+| GET | `/api/v1/tribe-categories` | 部落分类目录（分库 key，公开） |
+| GET | `/api/v1/activities?category=&page=&page_size=` | **某个活动分类的某一页**（分库分页） |
+| GET | `/api/v1/tribes?category=&page=&page_size=` | **某个部落分类的某一页**（分库分页） |
+| GET | `/api/v1/activities/{activity_id}` | 活动详情 |
+| GET | `/api/v1/data` | 无 `category`：个人信息 + 分类目录；带 `category`：该分类整理后分页 |
+| GET | `/api/v1/report` | Markdown 汇总报告（需一次拉取全部分类，较慢，低频用） |
+| GET | `/api/v1/me` | 当前登录用户信息 |
+| POST | `/api/v1/logout` | 退出登录（移除 token 缓存） |
+| GET | `/healthz` | 健康检查 |
+
+### 分库分页用法
+
+活动/部落/整理数据均**按分类独立查询、按页请求**，不再一次拉取全部：
+
+```text
+① GET /api/v1/activity-categories
+   → { "categories": [ { "key": "join", "label": "我报名的" }, ... ] }
+② GET /api/v1/activities?category=join&page=1&page_size=10
+   → { "kind": "activity", "category": "join", "label": "我报名的",
+       "page": 1, "page_size": 10, "total": 37, "total_pages": 4,
+       "records": [ ...该页10条原始字段... ] }
+③ 上一页/下一页：改 page 参数即可（page 从 1 开始，page_size 1~100）
+```
+
+- 部落分类 key：`manage`（我管理的）、`join`（我加入的）
+- 整理数据：`/api/v1/data?category=join&page=1&page_size=10` 返回该分类整理后的精简字段（与 `5idream-data.json` 同口径），无 `category` 时即时返回个人信息 + 分类目录，不请求 5idream
+- 每页结果按「用户+分类+页码+每页条数」缓存 60 秒，翻页各自独立、并发不重复请求；加 `&refresh=true` 强制刷新本页
+
+交互式 API 文档：http://127.0.0.1:8000/docs
+
+## 3. 登录流程（三步）
+
+```text
+① POST /api/v1/login/qr
+   → { session_id, qr_image_base64, qr_payload, expires_in }
+
+② 展示二维码，用「到梦空间」APP 扫码并确认
+   客户端每 2~3 秒 GET /api/v1/login/status/{session_id}
+   → 未确认：{ status: "pending" }
+   → 确认后：{ status: "success", token, user }   ← 服务端已把 token 写入个人缓存
+
+③ 数据接口鉴权：请求头携带  Authorization: Bearer <token>
+```
+
+示例（PowerShell）：
 
 ```powershell
-python 5idream_login.py
+# 1. 生成二维码
+$qr = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/login/qr
+# 打开 $qr.qr_image_base64 对应的二维码，用 APP 扫码确认
+
+# 2. 轮询（确认前会返回 pending）
+$s = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/login/status/$($qr.session_id)"
+$s.status          # success 后
+$token = $s.token
+
+# 3. 分页取数据（按分类、按页）
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/activities?category=join&page=1&page_size=10" `
+  -Headers @{ Authorization = "Bearer $token" }
+# 翻页：把 page 改成 2、3……
 ```
 
-运行流程：
+## 4. 配置（.env，可全部省略）
 
-1. 脚本生成二维码并输出保存位置。
-2. 使用到梦空间 APP 扫码并确认登录。
-3. 脚本获取个人资料、活动列表和部落列表。
-4. 在菜单中选择活动分类或部落分类。
-5. 选择活动编号后查询该活动的详细内容。
-6. 输入 `0` 返回上一级菜单或退出。
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `BASE_URL` | `https://www.5idream.net` | 站点地址 |
+| `REQUEST_DELAY_RANGE` | `0.5,1.5` | 每次请求前随机等待秒数（频率控制） |
+| `LOGIN_TIMEOUT_SECONDS` | `90` | 等待扫码确认的最大秒数 |
+| `MAX_ROWS` | `100` | 每类数据请求最大条数 |
+| `TOKEN_IDLE_TTL` | `3600` | token 个人缓存空闲过期秒数（0=不过期） |
+| `DATA_CACHE_TTL` | `60` | 分页查询结果缓存秒数（0=不缓存） |
+| `SESSION_TTL` | `1800` | 登录会话保留秒数 |
+| `CORS_ORIGINS` | `*` | 允许跨域来源 |
 
-## 命令行参数
+## 5. 目录结构
 
-```powershell
-python 5idream_login.py `
-  --qr outputs\5idream-login-qr.png `
-  --timeout 90 `
-  --rows 100 `
-  --report-out outputs\5idream-report.md `
-  --json-out outputs\5idream-data.json
+```text
+5idream-fastapi/
+├── run.py                # 本地启动入口
+├── requirements.txt
+├── .env.example          # 配置样例（复制为 .env）
+└── app/
+    ├── main.py           # FastAPI 应用、路由、鉴权、极简 UI
+    ├── client.py         # 5idream 异步客户端（httpx）
+    ├── cache.py          # token 个人缓存 / 登录会话 / 数据缓存
+    ├── formatters.py     # 字段翻译、报告渲染（原样移植）
+    └── config.py         # 配置
 ```
 
-- `--qr`：二维码图片保存路径，默认是当前目录下的 `5idream-login-qr.png`
-- `--timeout`：等待扫码登录的最长秒数，默认 `90`
-- `--rows`：每类数据请求的最大条数，默认 `100`
-- `--report-out`：Markdown 报告路径
-- `--json-out`：整理后 JSON 数据路径
+## 6. 与原 CLI 的差异
 
-## 输出内容
-
-活动列表只保留便于阅读的字段：
-
-- 活动名称
-- 活动类型
-- 活动地点
-- 活动时间
-- 活动图片链接
-- 部落名称
-- 报名状态
-
-活动详情包括：
-
-- 活动标题、活动 ID、活动级别
-- 活动时间、活动地点、活动类型
-- 发布者、报名制、报名状态
-- 具体规则、参与范围、报名时间、报名方式、报名人数
-- 负责人、组织者、指导老师
-- 活动介绍、参与须知、奖项设置、学分设置
-- 活动标签、活动详情、相关附件链接
-
-默认报告和 JSON 路径为脚本中配置的 `outputs` 目录。建议运行时显式指定路径，便于跨电脑使用。
-
-## 安全与隐私
-
-- 只使用本人有权访问的账号。
-- 不要分享二维码、登录 Token、Cookie、报告或 JSON 数据。
-- 报告和 JSON 可能包含姓名、头像、活动及部落信息，不建议提交到公开仓库。
-- 二维码使用后即可删除；脚本不会把登录凭据上传到第三方服务。
-
-## 免责声明
-
-本项目仅用于个人数据查询、自动化整理和学习测试。使用时请遵守目标网站服务条款、学校规定及相关法律法规，并合理控制请求频率。
+| 原 CLI | 本服务 |
+|---|---|
+| 同步 `requests.Session` | 异步 `httpx`，请求显式携带 token cookie，用户间隔离 |
+| `time.sleep(1~2s)` 阻塞 | `asyncio.sleep` 随机等待，不阻塞事件循环 |
+| token 只存单个会话内存 | 按 `user_id` 个人缓存，TTL 过期 + 重复登录刷新 + 可登出 |
+| 交互式 `input()` 菜单 | REST API + 极简网页 UI |
+| 一次性拉全部分类并导出文件 | 分库分页查询：按分类 key + page/page_size 单页请求，每页独立缓存 |
