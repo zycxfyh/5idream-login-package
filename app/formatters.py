@@ -439,8 +439,8 @@ def render_activity_detail(detail: dict[str, Any]) -> str:
 def render_report(data: dict[str, Any]) -> str:
     profile = data[PROFILE_KEY]
     lines = ["# \u5230\u68a6\u7a7a\u95f4\u4e2a\u4eba\u4fe1\u606f\u62a5\u544a", "", "## 1. \u4e2a\u4eba\u4fe1\u606f", ""]
-    lines.append(f"- **\u59d3\u540d：** {profile.get('name') or profile.get('realname') or '\u672a\u63d0\u4f9b'}")
-    lines.append(f"- **\u5934\u50cf：** {profile.get('avatar') or '\u672a\u63d0\u4f9b'}")
+    lines.append(f"- **姓名：** {profile.get('name') or profile.get('realname') or '未提供'}")
+    lines.append(f"- **头像：** {profile.get('avatar') or '未提供'}")
     for key, value in profile.items():
         if key in {"name", "realname", "avatar", "logopath"}:
             continue
