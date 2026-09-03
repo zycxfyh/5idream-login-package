@@ -289,9 +289,11 @@ async def login_status(session_id: str) -> dict[str, Any]:
         try:
             async with DreamClient(token) as dc:
                 user = await dc.check_token()
-        except (httpx.HTTPError, DreamAPIError) as exc:
+        except (httpx.HTTPError, DreamAPIError):
             session.status = "failed"
-            session.error = f"Token 校验失败: {exc}"
+            # httpx 异常可能包含带 token 查询参数的完整请求 URL；
+            # 不把上游异常详情回显给客户端，避免凭证出现在错误响应中。
+            session.error = "Token 校验失败，请重新扫码登录"
             return _session_response(session)
         user_id = str(user.get("id") or "")
         token_cache.put(user_id, token, user)  # token 个人缓存：按 user_id 写入
