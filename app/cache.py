@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -152,7 +153,7 @@ class PageCache:
     def __init__(self, ttl: int = 60):
         self._ttl = ttl
         self._entries: dict[str, tuple[float, dict[str, Any]]] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     @staticmethod
     def key_for(user_id: str, scope: str, category: str, page: int, page_size: int) -> str:
@@ -194,9 +195,7 @@ class PageCache:
             for key in stale:
                 self._entries.pop(key, None)
             removed += len(stale)
-        # 清理未被持有的锁，避免长期累积
-        idle = [key for key, lock in self._locks.items() if not lock.locked()]
-        for key in idle:
-            self._locks.pop(key, None)
-        removed += len(idle)
+        # 每个请求/等待者都会持有锁的强引用；WeakValueDictionary 会在
+        # 完全无人持有/等待后自动移除锁，避免在 release->waiter resume
+        # 的短暂窗口误删仍有等待者的锁。
         return removed
