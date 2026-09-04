@@ -101,6 +101,16 @@ def parse_response_json(response: httpx.Response) -> dict[str, Any]:
     return value
 
 
+def _page_rows(data: dict[str, Any]) -> list[Any]:
+    """读取分页 rows；缺失/null 表示空页，其它非数组 shape 视为协议异常。"""
+    rows = data.get("rows")
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise DreamAPIError("分页响应 rows 不是数组")
+    return rows
+
+
 # ------------------------------ 登录（未登录阶段） ------------------------------
 
 
@@ -233,7 +243,7 @@ class DreamClient:
             )
             response.raise_for_status()
             data = parse_response_json(response)
-            page_rows = data.get("rows") or []
+            page_rows = _page_rows(data)
             for item in page_rows:
                 if isinstance(item, dict):
                     copied = {key: absolute_url(value) for key, value in item.items()}
@@ -260,7 +270,7 @@ class DreamClient:
         )
         response.raise_for_status()
         data = parse_response_json(response)
-        page_rows = data.get("rows") or []
+        page_rows = _page_rows(data)
         records: list[dict[str, Any]] = []
         for item in page_rows:
             if isinstance(item, dict):
