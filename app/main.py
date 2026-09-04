@@ -293,7 +293,11 @@ async def login_status(session_id: str) -> dict[str, Any]:
             session.status = "failed"
             session.error = f"Token 校验失败: {exc}"
             return _session_response(session)
-        user_id = str(user.get("id") or "")
+        user_id = str(user.get("id") or "").strip()
+        if not user_id:
+            session.status = "failed"
+            session.error = "Token 校验响应缺少用户 ID"
+            return _session_response(session)
         token_cache.put(user_id, token, user)  # token 个人缓存：按 user_id 写入
         session.status = "success"
         session.token = token
