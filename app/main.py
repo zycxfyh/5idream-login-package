@@ -228,9 +228,15 @@ def _apply_processed(
     label: str,
     build_one: Any,
 ) -> dict[str, Any]:
-    payload.update({"kind": kind, "category": category, "label": label})
-    payload["records"] = [build_one(record) for record in payload["records"]]
-    return payload
+    # _fetch_page may return the object stored in PageCache. Build a separate
+    # response view so the processed endpoint cannot replace cached raw records.
+    return {
+        **payload,
+        "kind": kind,
+        "category": category,
+        "label": label,
+        "records": [build_one(record) for record in payload["records"]],
+    }
 
 
 # ------------------------------ 登录 ------------------------------
