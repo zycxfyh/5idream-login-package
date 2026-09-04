@@ -118,6 +118,7 @@ class LoginSessionStore:
             created_at=now,
             deadline=now + settings.login_timeout_seconds,
         )
+        session.poll_lock = asyncio.Lock()
         self._sessions[session_id] = session
         return session
 
@@ -128,6 +129,11 @@ class LoginSessionStore:
         if session.status == "pending" and time.time() > session.deadline:
             session.status = "expired"
         return session
+
+    def poll_lock_for(self, session_id: str) -> asyncio.Lock | None:
+        """Return the per-session poll lock without mutating expiry state."""
+        session = self._sessions.get(session_id)
+        return getattr(session, "poll_lock", None) if session is not None else None
 
     def cleanup(self) -> int:
         now = time.time()

@@ -17,6 +17,7 @@ import base64
 import io
 import logging
 from contextlib import asynccontextmanager
+from functools import wraps
 from typing import Any
 
 import httpx
@@ -259,7 +260,20 @@ async def create_login_qr() -> dict[str, Any]:
     }
 
 
+def _serialize_login_poll(fn):
+    @wraps(fn)
+    async def wrapped(session_id: str, *args, **kwargs):
+        lock = session_store.poll_lock_for(session_id)
+        if lock is None:
+            return await fn(session_id, *args, **kwargs)
+        async with lock:
+            return await fn(session_id, *args, **kwargs)
+
+    return wrapped
+
+
 @app.get("/api/v1/login/status/{session_id}", tags=["登录"])
+@_serialize_login_poll
 async def login_status(session_id: str) -> dict[str, Any]:
     """轮询扫码结果。pending 时请客户端每隔 2~3 秒调用一次。
 
